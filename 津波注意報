@@ -1,0 +1,79 @@
+<script>
+class TsunamiAlertSystem {
+    constructor() {
+        this.audioMap = {
+            seiche: document.getElementById('kiana-seiche'),
+            forecast: document.getElementById('kiana-tsunami-forecast'),
+            warning: document.getElementById('kiana-tsunami-warning'),
+            majorWarning: document.getElementById('kiana-tsunami-major')
+        };
+    }
+
+    // 生成海啸警报语音内容
+    generateTsunamiAlert(type, location = null, height = null) {
+        const templates = {
+            seiche: 'いくつかの海面変動が検出された',
+            forecast: '気象庁が津波予報を発表、落ち着いてください',
+            warning: `気象庁が津波警報を発表、直ちに避難を。${location}に津波警報を発表、予想される高さは${height}メートル`,
+            majorWarning: `気象庁が大津波警報を発表、直ちに高台に避難せよ。${location}に大津波警報を発表、予想される高さは${height}メートル`
+        };
+
+        return {
+            text: templates[type],
+            audio: this.audioMap[type]
+        };
+    }
+
+    // 触发海啸警报
+    triggerTsunamiAlert(type, location = null, height = null) {
+        const { text, audio } = this.generateTsunamiAlert(type, location, height);
+        this.speak(text);
+        this.playAudio(audio);
+    }
+
+    speak(text) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 0.9;
+        speechSynthesis.speak(utterance);
+    }
+
+    playAudio(audio) {
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play();
+        }
+    }
+}
+
+// 在processQuakeData中添加海啸检测逻辑
+function processQuakeData(quakes) {
+    const tsunamiSystem = new TsunamiAlertSystem();
+
+    quakes.forEach(quake => {
+        const props = quake.properties;
+        const coords = quake.geometry.coordinates;
+
+        // 海啸警报检测
+        if (props.tsunami === 1) {
+            const height = this.calculateTsunamiHeight(props.mag, coords[2]);
+            const location = jpLocations[props.place] || props.place;
+
+            if (props.mag >= 8.0) {
+                tsunamiSystem.triggerTsunamiAlert('majorWarning', location, height);
+            } else if (props.mag >= 7.0) {
+                tsunamiSystem.triggerTsunamiAlert('warning', location, height);
+            } else if (props.mag >= 6.5) {
+                tsunamiSystem.triggerTsunamiAlert('forecast');
+            } else {
+                tsunamiSystem.triggerTsunamiAlert('seiche');
+            }
+        }
+    });
+}
+
+// 计算海啸高度（经验公式）
+function calculateTsunamiHeight(magnitude, depth) {
+    return (magnitude ** 2 / (depth + 20)).toFixed(1);
+}
+</script>
