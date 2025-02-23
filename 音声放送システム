@@ -1,0 +1,91 @@
+<script>
+// 日语地名转换库（示例）
+const jpLocations = {
+    'Tokyo': '東京都',
+    'Osaka': '大阪府',
+    'Fukuoka': '福岡県',
+    'Hokkaido': '北海道',
+    // 可根据需要继续添加更多地区
+};
+
+class KianaVoice {
+    // 生成日语语音内容
+    generateJpAlert(type, place, magnitude = null) {
+        const location = jpLocations[place] || place; // 转换为日语地名
+        const templates = {
+            weak: `${location}で弱反現象を検出`,
+            shake: `${location}で揺れを検出`,
+            forecast: `日本気象庁第一報、${location}地方に規模${magnitude}の地震を検出`,
+            warning: `日本気象庁第一報、${location}地方に規模${magnitude}の地震発生`
+        };
+
+        return {
+            text: templates[type],
+            audio: this.getAudioType(type, magnitude)
+        };
+    }
+
+    // 获取对应的音频类型
+    getAudioType(type, magnitude) {
+        const types = {
+            weak: 'info',
+            shake: 'warning',
+            forecast: magnitude >= 4.5 ? 'warning' : 'info',
+            warning: 'tsunami'
+        };
+        return types[type];
+    }
+
+    // 播放语音
+    playAlert(type, place, magnitude = null) {
+        const { text, audio } = this.generateJpAlert(type, place, magnitude);
+        this.speak(text);
+        this.playAudio(audio);
+    }
+
+    speak(text) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 0.9;
+        speechSynthesis.speak(utterance);
+    }
+
+    playAudio(type) {
+        const audioMap = {
+            tsunami: document.getElementById('kiana-tsunami'),
+            warning: document.getElementById('kiana-warning'),
+            info: document.getElementById('kiana-info')
+        };
+        const audio = audioMap[type];
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play();
+        }
+    }
+}
+
+// 在processQuakeData中添加：
+function processQuakeData(quakes) {
+    quakes.forEach(quake => {
+        const props = quake.properties;
+        const coords = quake.geometry.coordinates;
+        
+        // 弱反事件检测
+        if(props.mag < 4.0 && coords[2] > 70) {
+            kiana.playAlert('weak', props.place);
+            return;
+        }
+
+        // 摇晃检测
+        if(props.mag >= 3.0 && props.mag < 4.5) {
+            kiana.playAlert('shake', props.place);
+        }
+
+        // 地震警报
+        if(props.mag >= 4.5) {
+            const alertType = props.mag >= 6.5 ? 'warning' : 'forecast';
+            kiana.playAlert(alertType, props.place, props.mag);
+        }
+    });
+}
+</script>
