@@ -1,215 +1,297 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>实时地震预警系统（Eiysia支持）</title>
+    <title>Kiana 災害警報システム</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
     <style>
         :root {
             --alert-red: #ff4444;
-            --alert-yellow: #ffd700;
             --alert-blue: #2196F3;
+            --alert-yellow: #ffd700;
         }
-        /* 爱莉希雅主题配色 */
-        .elysia-theme {
-            --primary-color: #ff6f61;
-            --secondary-color: #ffcccb;
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Noto Sans JP', sans-serif;
+            background: #0f172a;
+            color: white;
+            overflow: hidden;
         }
-        /* 误报提示样式 */
-        .false-alert {
-            border-left: 5px solid var(--alert-yellow);
-            background: rgba(255, 215, 0, 0.1);
+
+        #alertBanner {
+            background: linear-gradient(90deg, var(--alert-red), #ff6b6b);
+            padding: 12px;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            font-size: 14px;
         }
-        /* 弱反标记样式 */
-        .weak-event {
-            opacity: 0.6;
-            filter: grayscale(70%);
+
+        #mapContainer {
+            height: 100vh;
+            width: 100vw;
+            margin-top: 60px;
+        }
+
+        .control-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(5px);
+            padding: 12px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        button {
+            background: var(--alert-blue);
+            border: none;
+            padding: 8px 16px;
+            color: white;
+            border-radius: 20px;
+            margin: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .quake-marker {
+            background: var(--alert-red);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.8); opacity: 0.7; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.8); opacity: 0.7; }
+        }
+
+        /* 移动端优化 */
+        @media (max-width: 480px) {
+            #alertBanner {
+                font-size: 12px;
+                padding: 10px;
+            }
+
+            button {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
         }
     </style>
 </head>
-<body class="elysia-theme">
-    <!-- 误报提示栏 -->
-    <div id="falseAlert" class="alert false-alert" style="display:none;"></div>
-    <!-- 主警报栏 -->
-    <div id="alertBanner" class="alert"></div>
-    <!-- 地图容器 -->
+<body>
+    <div id="alertBanner"></div>
     <div id="mapContainer"></div>
+    
+    <div class="control-panel">
+        <button onclick="toggleVoice()">音声切替</button>
+        <button onclick="testAlert()">テスト警報</button>
+    </div>
 
-    <!-- 爱莉希雅语音资源 -->
-    <audio id="elysia-tsunami" src="https://example.com/elysia_tsunami.mp3"></audio>
-    <audio id="elysia-warning" src="https://example.com/elysia_warning.mp3"></audio>
-    <audio id="elysia-info" src="https://example.com/elysia_info.mp3"></audio>
-    <audio id="elysia-false-alert" src="https://example.com/elysia_false_alert.mp3"></audio>
+    <!-- 琪亚娜语音资源 -->
+    <audio id="kiana-quake" src="https://your-cdn.com/kiana_quake.mp3"></audio>
+    <audio id="kiana-tsunami" src="https://your-cdn.com/kiana_tsunami.mp3"></audio>
+    <audio id="kiana-aftershock" src="https://your-cdn.com/kiana_aftershock.mp3"></audio>
 
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
         // 配置参数
         const CONFIG = {
-            minMagnitude: 3.0,
-            updateInterval: 30000,
+            minMagnitude: 4.5,
+            updateInterval: 60000,
             mapCenter: [36.2048, 138.2529],
-            validation: {
-                requiredSources: 2,      // 需要至少2个数据源确认
-                timeWindow: 30000,       // 30秒验证窗口
-                falsePositiveCheck: true // 启用误报检测
-            },
-            weakEventThresholds: {
-                maxMag: 4.0,             // 最大震级
-                minDepth: 70             // 最小深度
+            tsunamiThreshold: 6.5,
+            aftershock: {
+                timeWindow: 72 * 3600 * 1000, // 72小时
+                distance: 50, // 公里
+                magDifference: 1.0
             }
         };
 
-        // 爱莉希雅语音播报逻辑
-        class ElysiaVoice {
+        // 初始化地图
+        const map = L.map('mapContainer', {
+            zoomControl: false,
+            attributionControl: false,
+            touchZoom: true,
+            doubleClickZoom: false,
+            tap: false
+        }).setView(CONFIG.mapCenter, 6);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18
+        }).addTo(map);
+
+        // 地震数据处理器
+        class QuakeProcessor {
             constructor() {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                this.mainShocks = new Map();
             }
 
-            play(type) {
-                const audioMap = {
-                    tsunami: document.getElementById('elysia-tsunami'),
-                    warning: document.getElementById('elysia-warning'),
-                    info: document.getElementById('elysia-info'),
-                    falseAlert: document.getElementById('elysia-false-alert')
+            async fetchData() {
+                try {
+                    const response = await fetch('https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=4.5');
+                    return await response.json();
+                } catch (error) {
+                    console.error('データ取得失敗:', error);
+                    return { features: [] };
+                }
+            }
+
+            processData(data) {
+                data.features.forEach(quake => {
+                    const props = quake.properties;
+                    const coords = quake.geometry.coordinates;
+                    const event = {
+                        id: quake.id,
+                        time: props.time,
+                        lat: coords[1],
+                        lon: coords[0],
+                        mag: props.mag,
+                        place: props.place,
+                        tsunami: props.tsunami
+                    };
+
+                    this.checkAftershock(event);
+                    this.displayEvent(event);
+                });
+                this.cleanupOldEvents();
+            }
+
+            checkAftershock(event) {
+                for (const [id, mainShock] of this.mainShocks) {
+                    const distance = this.calculateDistance(
+                        [mainShock.lat, mainShock.lon],
+                        [event.lat, event.lon]
+                    );
+                    const timeDiff = event.time - mainShock.time;
+                    
+                    if (timeDiff > 0 && 
+                        timeDiff <= CONFIG.aftershock.timeWindow &&
+                        distance <= CONFIG.aftershock.distance &&
+                        (mainShock.mag - event.mag) >= CONFIG.aftershock.magDifference) {
+                        VoiceSystem.reportAftershock(mainShock, event);
+                        return;
+                    }
+                }
+                this.mainShocks.set(event.id, event);
+                VoiceSystem.reportEarthquake(event);
+            }
+
+            calculateDistance(coord1, coord2) {
+                const R = 6371;
+                const dLat = this.deg2rad(coord2[0]-coord1[0]);
+                const dLon = this.deg2rad(coord2[1]-coord1[1]);
+                const a = 
+                    Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(this.deg2rad(coord1[0])) * 
+                    Math.cos(this.deg2rad(coord2[0])) * 
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+                return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            }
+
+            deg2rad(deg) { return deg * (Math.PI/180); }
+
+            cleanupOldEvents() {
+                const now = Date.now();
+                this.mainShocks.forEach((event, id) => {
+                    if (now - event.time > CONFIG.aftershock.timeWindow) {
+                        this.mainShocks.delete(id);
+                    }
+                });
+            }
+
+            displayEvent(event) {
+                L.circleMarker([event.lat, event.lon], {
+                    radius: event.mag * 3,
+                    color: event.tsunami ? '#ff4444' : '#ffa500',
+                    className: 'quake-marker'
+                }).bindPopup(`
+                    <b>${this.getJPName(event.place)}</b><hr>
+                    規模: M${event.mag}<br>
+                    時間: ${new Date(event.time).toLocaleString('ja-JP')}
+                `).addTo(map);
+            }
+
+            getJPName(place) {
+                const locations = {
+                    'Tokyo': '東京都',
+                    'Osaka': '大阪府',
+                    'Fukuoka': '福岡県',
+                    'Hokkaido': '北海道'
                 };
-                const audio = audioMap[type];
+                return locations[place] || place;
+            }
+        }
+
+        // 语音播报系统
+        class VoiceSystem {
+            static reportEarthquake(event) {
+                const time = new Date(event.time).toLocaleTimeString('ja-JP');
+                const text = `${time}、${event.place}でM${event.mag}の地震を検出`;
+                this.speak(text, event.tsunami ? 'tsunami' : 'quake');
+            }
+
+            static reportAftershock(mainShock, aftershock) {
+                const time = new Date(aftershock.time).toLocaleTimeString('ja-JP');
+                const text = `${time}、${mainShock.place}震源域で余震を検出（M${aftershock.mag}）`;
+                this.speak(text, 'aftershock');
+            }
+
+            static speak(text, type) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ja-JP';
+                utterance.rate = 0.9;
+                speechSynthesis.speak(utterance);
+                
+                const audio = document.getElementById(`kiana-${type}`);
                 if (audio) {
                     audio.currentTime = 0;
                     audio.play();
                 }
             }
-
-            generateSpeech(text) {
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.voice = speechSynthesis.getVoices().find(v => v.name.includes('Japanese'));
-                utterance.pitch = 1.2; // 提高音调
-                utterance.rate = 0.9;  // 稍慢语速
-                speechSynthesis.speak(utterance);
-            }
         }
 
-        const elysia = new ElysiaVoice();
+        // 初始化系统
+        const processor = new QuakeProcessor();
 
-        // 初始化地图
-        const map = L.map('mapContainer', {
-            zoomControl: false,
-            tap: false
-        }).setView(CONFIG.mapCenter, 5);
-
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '© OpenStreetMap'
-        }).addTo(map);
-
-        // 主功能逻辑
-        async function fetchValidatedData() {
-            try {
-                const [src1, src2] = await Promise.all([
-                    fetch('https://api.geonet.org.nz/quake?MMI=3'),
-                    fetch('https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=3')
-                ]);
-                const data1 = await src1.json();
-                const data2 = await src2.json();
-                return validateEvents(data1.features.concat(data2.features));
-            } catch (error) {
-                console.error('数据获取失败:', error);
-                return [];
-            }
+        async function updateData() {
+            const data = await processor.fetchData();
+            processor.processData(data);
         }
 
-        function validateEvents(events) {
-            const validated = [];
-            const now = Date.now();
-            const eventCache = new Map();
-
-            events.forEach(event => {
-                const key = `${event.geometry.coordinates}_${event.properties.mag.toFixed(1)}`;
-
-                if (isWeakEvent(event)) {
-                    markWeakEvent(event);
-                    return;
-                }
-
-                if (CONFIG.validation.falsePositiveCheck) {
-                    if (eventCache.has(key)) {
-                        const cached = eventCache.get(key);
-                        if (now - cached.time < CONFIG.validation.timeWindow) {
-                            if (++cached.count >= CONFIG.validation.requiredSources) {
-                                validated.push(event);
-                                eventCache.delete(key);
-                            }
-                            return;
-                        }
-                    }
-                    eventCache.set(key, { time: now, count: 1 });
-                } else {
-                    validated.push(event);
-                }
-            });
-
-            return validated;
+        // 控制功能
+        function toggleVoice() {
+            const enabled = document.getElementById('kiana-quake').muted;
+            document.querySelectorAll('audio').forEach(audio => audio.muted = !enabled);
+            alert(`音声${enabled ? '有効' : '無効'}`);
         }
 
-        function isWeakEvent(event) {
-            const props = event.properties;
-            return props.mag < CONFIG.weakEventThresholds.maxMag && 
-                   event.geometry.coordinates[2] > CONFIG.weakEventThresholds.minDepth;
+        function testAlert() {
+            VoiceSystem.speak('テスト警報を発動します', 'quake');
+            L.circleMarker([35.6895, 139.6917], {
+                radius: 7.5 * 3,
+                color: '#ff4444',
+                className: 'quake-marker'
+            }).addTo(map);
         }
 
-        function markWeakEvent(event) {
-            const marker = L.circleMarker([event.geometry.coordinates[1], event.geometry.coordinates[0]], {
-                radius: 8,
-                color: '#666',
-                className: 'weak-event'
-            }).bindPopup(`弱反事件: M${event.properties.mag}`);
-            marker.addTo(map);
-        }
-
-        function triggerAdvancedAlert(event) {
-            const banner = document.getElementById('alertBanner');
-            const isMajor = event.properties.mag >= 6.5;
-
-            // 爱莉希雅语音播报
-            if (isMajor) {
-                elysia.play('tsunami');
-                elysia.generateSpeech(`检测到强烈地震波！${event.properties.place}的大家，请立即避难哦～`);
-            } else {
-                elysia.play('warning');
-                elysia.generateSpeech(`注意！${event.properties.place}发生了${event.properties.mag}级地震`);
-            }
-
-            // 显示警报
-            banner.style.display = 'block';
-            banner.style.background = isMajor ? 
-                'linear-gradient(90deg, var(--alert-red), #ff6b6b)' :
-                'linear-gradient(90deg, var(--alert-blue), #64b5f6)';
-            banner.innerHTML = `⚠️ ${event.properties.place}发生M${event.properties.mag}级地震`;
-
-            setTimeout(() => banner.style.display = 'none', event.properties.mag * 1000);
-        }
-
-        function showFalseAlert(reason) {
-            const falseAlert = document.getElementById('falseAlert');
-            falseAlert.innerHTML = `⚠️ 误报过滤: ${reason}`;
-            falseAlert.style.display = 'block';
-            elysia.play('falseAlert');
-            elysia.generateSpeech(`刚刚的警报可能是误报哦，请保持冷静～`);
-            setTimeout(() => falseAlert.style.display = 'none', 5000);
-        }
-
-        // 主流程
-        async function mainProcess() {
-            const events = await fetchValidatedData();
-            events.forEach(event => {
-                if (event.properties.mag >= CONFIG.minMagnitude) {
-                    triggerAdvancedAlert(event);
-                }
-            });
-        }
-
-        // 初始化运行
-        mainProcess();
-        setInterval(mainProcess, CONFIG.updateInterval);
+        // 启动系统
+        setInterval(updateData, CONFIG.updateInterval);
+        updateData();
     </script>
 </body>
 </html>
